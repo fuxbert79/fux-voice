@@ -1,7 +1,7 @@
 {
   "hotkeys": {
-    "start_stop": "ctrl+alt+space",
-    "pause_resume": "ctrl+alt+p",
+    "start_stop": "ctrl+shift+space",
+    "pause_resume": "ctrl+shift+p",
     "cancel": "esc"
   },
   "audio": {
