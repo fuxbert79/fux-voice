@@ -75,7 +75,9 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 def load_config() -> dict[str, Any]:
     """Laedt config.json, faellt auf config.json.example zurueck."""
-    load_dotenv(ENV_PATH)
+    # override=True: nach Speichern im Dialog muss der NEUE Key in os.environ.
+    # Ohne override behaelt dotenv den ersten (leeren) Wert.
+    load_dotenv(ENV_PATH, override=True)
     logger.info("APP_DIR      = %s", APP_DIR)
     logger.info("RESOURCE_DIR = %s", RESOURCE_DIR)
     logger.info("ENV_PATH     = %s (exists=%s)", ENV_PATH, ENV_PATH.exists())

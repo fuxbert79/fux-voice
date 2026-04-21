@@ -1,10 +1,9 @@
-"""Globale Hotkeys mit Event-Suppression via keyboard-Library + Scan-Codes.
+"""Globale Hotkeys mit Event-Suppression via keyboard-Library.
 
-Warum dieser Ansatz?
-- `keyboard.add_hotkey(..., suppress=True)` blockiert das Event → damit kein
-  'ö' ins aktive Fenster geschrieben wird wenn Win+Ö als Hotkey dient.
-- Scan-Codes (statt Strings) umgehen den Parser, der auf DE-Tastaturen mit
-  Umlauten unzuverlaessig ist. Umlaute sind positional, also layout-stabil.
+Umlaute als Scan-Code-Syntax (`#NN`) — umgeht den fragilen keyboard-Parser,
+der auf DE-Tastaturen Buchstaben wie 'ö' nicht zuverlaessig aufloest.
+
+Beispiel: 'windows+ö' → 'windows+#39' (Scan-Code 39 = Ö auf DE-Layout)
 """
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ import keyboard
 
 logger = logging.getLogger(__name__)
 
-# Windows Scan-Codes fuer DE-Tastatur (positional, layout-unabhaengig)
+# Windows Scan-Codes fuer DE-Tastatur (positional)
 _UMLAUT_SCAN_CODES = {
     "ö": 39,   # 0x27
     "ä": 40,   # 0x28
@@ -32,41 +31,29 @@ _MODIFIER_ALIASES = {
 }
 
 
-def _to_scan_code_steps(combo: str) -> list[tuple[int, ...]]:
-    """'windows+ö' → [(91, 92), (39,)]
+def _normalize_combo(combo: str) -> str:
+    """'windows+ö' → 'windows+#39'
 
-    Jedes Step ist ein Tuple gleichwertiger Scan-Codes (left/right Varianten).
+    - Modifier-Aliases werden vereinheitlicht.
+    - Umlaute werden zu '#NN' Scan-Code-Notation umgesetzt.
+    - '#NN'-Prefix bleibt unveraendert (Direkt-Angabe).
+    - Alles andere (a, space, f9, esc) bleibt wie in keyboard-Lib erwartet.
     """
     parts = [p.strip() for p in combo.split("+") if p.strip()]
-    steps: list[tuple[int, ...]] = []
+    out = []
     for part in parts:
         low = part.lower()
         if low in _MODIFIER_ALIASES:
-            mod = _MODIFIER_ALIASES[low]
-            codes = tuple(keyboard.key_to_scan_codes(mod))
-            if not codes:
-                raise ValueError(f"Keine Scan-Codes fuer Modifier '{mod}'")
-            steps.append(codes)
+            out.append(_MODIFIER_ALIASES[low])
         elif low in _UMLAUT_SCAN_CODES:
-            steps.append((_UMLAUT_SCAN_CODES[low],))
+            out.append(f"#{_UMLAUT_SCAN_CODES[low]}")
         elif low.startswith("#") and low[1:].isdigit():
-            steps.append((int(low[1:]),))
-        elif len(low) == 1 or low in {"space", "enter", "tab", "esc", "escape",
-                                       "backspace", "delete", "insert", "home", "end",
-                                       "pageup", "pagedown", "up", "down", "left", "right",
-                                       "pause", "caps lock", "num lock", "scroll lock"}:
-            codes = tuple(keyboard.key_to_scan_codes(low))
-            steps.append(codes if codes else ())
-        elif low.startswith("f") and low[1:].isdigit():
-            codes = tuple(keyboard.key_to_scan_codes(low))
-            steps.append(codes if codes else ())
+            out.append(low)
         else:
-            codes = tuple(keyboard.key_to_scan_codes(low))
-            steps.append(codes if codes else ())
-
-    if not steps or any(not s for s in steps):
-        raise ValueError(f"Kombi '{combo}' konnte nicht vollstaendig aufgeloest werden")
-    return steps
+            out.append(low)
+    if not out:
+        raise ValueError(f"Leerer Hotkey: '{combo}'")
+    return "+".join(out)
 
 
 class HotkeyListener:
@@ -101,25 +88,26 @@ class HotkeyListener:
     def _register(self, combo: str, callback: Callable[[], None], name: str,
                   suppress: bool) -> None:
         try:
-            steps = _to_scan_code_steps(combo)
+            normalized = _normalize_combo(combo)
         except Exception:
-            logger.exception("Hotkey %s (%s) konnte nicht aufgeloest werden", name, combo)
+            logger.exception("Hotkey %s (%s) konnte nicht normalisiert werden", name, combo)
             return
 
         try:
             handle = keyboard.add_hotkey(
-                steps,
+                normalized,
                 self._safe(callback, name),
                 suppress=suppress,
                 trigger_on_release=False,
             )
         except Exception:
-            logger.exception("Hotkey %s (%s) konnte nicht registriert werden", name, combo)
+            logger.exception("Hotkey %s (%s → %s) konnte nicht registriert werden",
+                             name, combo, normalized)
             return
 
         self._handles.append(handle)
-        logger.info("Registriert: %-12s = %-18s suppress=%s steps=%s",
-                    name, combo, suppress, steps)
+        logger.info("Registriert: %-12s = %-18s → %-20s suppress=%s",
+                    name, combo, normalized, suppress)
 
     def start(self) -> None:
         # Haupt-Hotkeys MIT suppress → kein Zeichen-Echo ins aktive Fenster
@@ -132,15 +120,15 @@ class HotkeyListener:
         if self._cancel_handle is not None:
             return
         try:
+            normalized = _normalize_combo(self.cancel_combo)
             # ESC ohne suppress — sonst schluckt fux-voice ESC in allen Apps
-            steps = _to_scan_code_steps(self.cancel_combo)
             self._cancel_handle = keyboard.add_hotkey(
-                steps,
+                normalized,
                 self._safe(self._on_cancel, "cancel"),
                 suppress=False,
                 trigger_on_release=False,
             )
-            logger.info("Cancel-Hotkey aktiv: %s", self.cancel_combo)
+            logger.info("Cancel-Hotkey aktiv: %s → %s", self.cancel_combo, normalized)
         except Exception:
             logger.exception("Cancel-Hotkey %s konnte nicht registriert werden",
                              self.cancel_combo)
