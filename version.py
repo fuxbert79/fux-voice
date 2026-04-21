@@ -1,7 +1,7 @@
 """Version und Branding-Konstanten fuer fux-voice."""
 from __future__ import annotations
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
 BUILD_DATE = "2026-04-21"
 
 # Branding

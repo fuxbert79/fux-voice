@@ -20,7 +20,7 @@ from about_dialog import show_about_dialog
 from audio_recorder import AudioRecorder
 from config import ENV_PATH, ASSETS_DIR
 from config_dialog import show_config_dialog
-from hotkey_listener import HotkeyListener
+from hotkey_listener import HotkeyListener, start_diagnostic
 from status_window import StatusWindow
 from text_injector import TextInjector
 from transcriber import WhisperTranscriber
@@ -220,6 +220,11 @@ class FuxVoiceTrayApp:
                 self.hotkeys.disable_cancel()
                 self._set_state(State.IDLE)
 
+    def _menu_diagnose(self, _icon: TrayIcon, _item) -> None:
+        """Startet Keyboard-Diagnose (loggt alle Tastendrucke 30s lang)."""
+        logger.info("Diagnose-Modus via Tray-Menu ausgeloest")
+        start_diagnostic(30)
+
     def _menu_about(self, _icon: TrayIcon, _item) -> None:
         threading.Thread(target=self._open_about_dialog, daemon=True).start()
 
@@ -330,6 +335,7 @@ class FuxVoiceTrayApp:
             MenuItem(f"Verwerfen  ({hk['cancel']})", lambda i, _: self._on_hotkey_cancel()),
             Menu.SEPARATOR,
             MenuItem("Konfiguration …", self._menu_config),
+            MenuItem("Hotkey-Diagnose (30s) …", self._menu_diagnose),
             MenuItem("Über fux-voice …", self._menu_about),
             Menu.SEPARATOR,
             MenuItem("Beenden", self._menu_quit),

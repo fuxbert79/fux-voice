@@ -156,3 +156,50 @@ class HotkeyListener:
             keyboard.unhook_all_hotkeys()
         except Exception:
             pass
+
+
+def start_diagnostic(duration_s: int = 30) -> None:
+    """Loggt alle KEY_DOWN-Events fuer N Sekunden.
+
+    Zweck: Herausfinden, welche scan_codes / names / vks die Tastatur
+    tatsaechlich sendet. Hilfreich wenn die hardcoded Scan-Codes
+    (Oe=39, Ae=40) auf einer bestimmten Tastatur anders sind.
+    """
+    import threading
+
+    logger.info("=" * 60)
+    logger.info("HOTKEY-DIAGNOSE aktiv fuer %d Sekunden", duration_s)
+    logger.info("Druecke deine gewuenschte Hotkey-Kombination(!)")
+    logger.info("=" * 60)
+
+    stop_flag = {"stop": False}
+    hook_ref = {"h": None}
+
+    def diag_hook(event):
+        if stop_flag["stop"]:
+            return
+        if event.event_type != keyboard.KEY_DOWN:
+            return
+        logger.info(
+            "DIAG KEY_DOWN: scan_code=%s  name=%r  is_keypad=%s",
+            event.scan_code, event.name, getattr(event, "is_keypad", None),
+        )
+
+    try:
+        hook_ref["h"] = keyboard.hook(diag_hook)
+    except Exception:
+        logger.exception("Diag-Hook konnte nicht installiert werden")
+        return
+
+    def _stop() -> None:
+        stop_flag["stop"] = True
+        try:
+            if hook_ref["h"]:
+                keyboard.unhook(hook_ref["h"])
+        except Exception:
+            pass
+        logger.info("HOTKEY-DIAGNOSE beendet")
+
+    timer = threading.Timer(duration_s, _stop)
+    timer.daemon = True
+    timer.start()
