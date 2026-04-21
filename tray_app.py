@@ -211,7 +211,8 @@ class FuxVoiceTrayApp:
         try:
             show_config_dialog(
                 env_path=ENV_PATH,
-                on_saved=self._on_api_key_saved,
+                current_device=self.config.get("audio", {}).get("device"),
+                on_saved=self._on_config_saved,
                 icon_path=icon_path if icon_path.exists() else None,
             )
         except Exception:
@@ -219,10 +220,45 @@ class FuxVoiceTrayApp:
         finally:
             self._config_dialog_open = False
 
-    def _on_api_key_saved(self, new_key: str) -> None:
-        logger.info("API-Key aktualisiert")
-        self.config["_openai_api_key"] = new_key
-        self._rebuild_transcriber()
+    def _on_config_saved(self, updates: dict) -> None:
+        """Wird nach Speichern aus dem Konfig-Dialog gerufen.
+
+        updates: {"api_key": str, "device": str|None}
+        """
+        new_key = updates.get("api_key", "")
+        new_device = updates.get("device")
+
+        if new_key:
+            logger.info("API-Key aktualisiert")
+            self.config["_openai_api_key"] = new_key
+            self._rebuild_transcriber()
+
+        old_device = self.config.get("audio", {}).get("device")
+        if new_device != old_device:
+            logger.info("Audio-Device geaendert: %r → %r", old_device, new_device)
+            self.config.setdefault("audio", {})["device"] = new_device
+            try:
+                from config import save_user_config
+                save_user_config({"audio": {"device": new_device}})
+            except Exception:
+                logger.exception("config.json konnte nicht geschrieben werden")
+            self._rebuild_recorder()
+
+    def _rebuild_recorder(self) -> None:
+        """Rebaut den AudioRecorder mit aktuellen Audio-Settings.
+
+        Nur im IDLE-State — waehrend Aufnahme nicht tauschen.
+        """
+        if self.state != State.IDLE:
+            logger.info("Device-Wechsel wirkt ab naechster Aufnahme (aktuell State=%s)", self.state.value)
+            return
+        audio_cfg = self.config["audio"]
+        self.recorder = AudioRecorder(
+            sample_rate=audio_cfg["sample_rate"],
+            channels=audio_cfg["channels"],
+            device=audio_cfg.get("device"),
+        )
+        logger.info("AudioRecorder neu gebaut (device=%r)", audio_cfg.get("device"))
 
     def _menu_quit(self, icon: TrayIcon, _item) -> None:
         logger.info("Beende fux-voice …")

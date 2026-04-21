@@ -54,3 +54,26 @@ def load_config() -> dict[str, Any]:
 
 def has_api_key(config: dict[str, Any]) -> bool:
     return bool(config.get("_openai_api_key"))
+
+
+def save_user_config(updates: dict[str, Any]) -> None:
+    """Merged updates in die user config.json (atomar).
+
+    `updates` ist ein (teilweises) Config-Dict, z.B.
+    {"audio": {"device": "Mikrofon XY"}}.
+    Interne Felder wie "_openai_api_key" werden ignoriert.
+    """
+    if CONFIG_PATH.exists():
+        with CONFIG_PATH.open("r", encoding="utf-8") as f:
+            current = json.load(f)
+    else:
+        current = {}
+
+    clean_updates = {k: v for k, v in updates.items() if not k.startswith("_")}
+    merged = _deep_merge(current, clean_updates)
+
+    tmp_path = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=2, ensure_ascii=False)
+    tmp_path.replace(CONFIG_PATH)
+    logger.info("config.json aktualisiert (Pfad: %s)", CONFIG_PATH)

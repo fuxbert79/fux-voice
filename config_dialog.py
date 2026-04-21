@@ -1,8 +1,4 @@
-"""Konfigurations-Dialog (tkinter) mit API-Key-Verbindungstest.
-
-Wird via Tray-Rechtsklick aufgerufen oder automatisch beim Erst-Start
-falls noch kein API-Key hinterlegt ist.
-"""
+"""Konfigurations-Dialog (tkinter) mit API-Key-Test und Mikrofon-Auswahl."""
 from __future__ import annotations
 
 import logging
@@ -10,10 +6,14 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================================
+# .env Lesen/Schreiben
+# ============================================================
 
 def save_api_key_to_env(env_path: Path, api_key: str) -> None:
     """Schreibt/aktualisiert OPENAI_API_KEY in .env (atomar)."""
@@ -55,19 +55,17 @@ def _mask_key(key: str) -> str:
     return f"{key[:10]}…{key[-5:]}"
 
 
-def test_api_key(api_key: str, timeout_s: float = 10.0) -> tuple[bool, str]:
-    """Testet API-Key via OpenAI models.list().
+# ============================================================
+# OpenAI-Test
+# ============================================================
 
-    Returns: (success, kurze Statusnachricht)
-    """
+def test_api_key(api_key: str, timeout_s: float = 10.0) -> tuple[bool, str]:
     if not api_key or not api_key.strip():
         return False, "Kein Key eingegeben"
-
     try:
         from openai import OpenAI
     except Exception as exc:
         return False, f"openai-Library fehlt: {exc}"
-
     try:
         client = OpenAI(api_key=api_key.strip(), timeout=timeout_s)
         models = client.models.list()
@@ -89,25 +87,74 @@ def test_api_key(api_key: str, timeout_s: float = 10.0) -> tuple[bool, str]:
         return False, f"Fehler: {msg}"
 
 
-# Ampel-Farben
-_LED_COLOR_IDLE  = "#808080"  # Grau
-_LED_COLOR_TEST  = "#f0b500"  # Gelb/Orange
-_LED_COLOR_OK    = "#28a745"  # Grün
-_LED_COLOR_FAIL  = "#dc3545"  # Rot
+# ============================================================
+# Audio-Device-Helfer
+# ============================================================
 
+def list_input_devices() -> list[dict[str, Any]]:
+    """Alle Eingabe-Geraete via sounddevice."""
+    try:
+        import sounddevice as sd
+        devices = sd.query_devices()
+        inputs = []
+        for idx, dev in enumerate(devices):
+            if dev.get("max_input_channels", 0) > 0:
+                inputs.append({
+                    "index": idx,
+                    "name": dev["name"],
+                    "channels": int(dev["max_input_channels"]),
+                    "sample_rate": int(dev.get("default_samplerate", 0) or 0),
+                })
+        return inputs
+    except Exception:
+        logger.exception("sounddevice konnte Geraete nicht auflisten")
+        return []
+
+
+def record_peak(device: Optional[str | int], duration_s: float = 2.0, sample_rate: int = 16000) -> tuple[float, float]:
+    """Nimmt kurz auf und gibt (peak, rms) zurueck (normalisiert 0..1)."""
+    import sounddevice as sd
+    import numpy as np
+
+    frames = int(duration_s * sample_rate)
+    audio = sd.rec(frames, samplerate=sample_rate, channels=1, device=device, dtype="float32")
+    sd.wait()
+    if audio.ndim > 1:
+        audio = audio.flatten()
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    rms = float(np.sqrt(np.mean(audio ** 2))) if len(audio) else 0.0
+    return peak, rms
+
+
+# ============================================================
+# Konstanten
+# ============================================================
+
+_LED_COLOR_IDLE = "#808080"
+_LED_COLOR_TEST = "#f0b500"
+_LED_COLOR_OK = "#28a745"
+_LED_COLOR_FAIL = "#dc3545"
+
+_DEFAULT_DEVICE_LABEL = "Standard-Geraet (Windows-Default)"
+
+
+# ============================================================
+# Dialog
+# ============================================================
 
 def show_config_dialog(
     env_path: Path,
-    on_saved: Optional[Callable[[str], None]] = None,
+    current_device: Optional[str] = None,
+    on_saved: Optional[Callable[[dict[str, Any]], None]] = None,
     icon_path: Optional[Path] = None,
 ) -> bool:
-    """Zeigt modalen Konfigurations-Dialog. Gibt True zurueck wenn gespeichert."""
+    """Modaler Konfigurations-Dialog. Gibt True zurueck wenn gespeichert."""
     saved_flag = {"value": False}
     last_tested_key = {"value": "", "ok": False}
 
     root = tk.Tk()
     root.title("fux-voice — Konfiguration")
-    root.geometry("620x340")
+    root.geometry("660x500")
     root.resizable(False, False)
     try:
         root.attributes("-topmost", True)
@@ -120,63 +167,59 @@ def show_config_dialog(
         except Exception:
             logger.debug("Icon konnte nicht gesetzt werden")
 
-    current_key = load_api_key_from_env(env_path)
-    if current_key.startswith("sk-proj-...") or current_key == "":
-        current_key = ""
-
     bg = root.cget("bg")
 
     main = ttk.Frame(root, padding=20)
     main.pack(fill="both", expand=True)
 
+    # ------------------------------------------------------------
+    # Sektion API-Key
+    # ------------------------------------------------------------
+
+    current_key = load_api_key_from_env(env_path)
+    if current_key.startswith("sk-proj-...") or current_key == "":
+        current_key = ""
+
     ttk.Label(main, text="OpenAI API-Key", font=("Segoe UI", 11, "bold")).pack(anchor="w")
-    ttk.Label(main, text=f"Aktuell: {_mask_key(current_key)}", foreground="gray").pack(anchor="w", pady=(2, 10))
+    ttk.Label(main, text=f"Aktuell: {_mask_key(current_key)}", foreground="gray").pack(anchor="w", pady=(2, 8))
 
-    # Zeile: Entry + Ampel + Zeigen + Test-Button
-    entry_frame = ttk.Frame(main)
-    entry_frame.pack(fill="x")
-
+    key_frame = ttk.Frame(main)
+    key_frame.pack(fill="x")
     key_var = tk.StringVar(value=current_key)
-    entry = ttk.Entry(entry_frame, textvariable=key_var, show="*", width=48)
+    entry = ttk.Entry(key_frame, textvariable=key_var, show="*", width=48)
     entry.pack(side="left", fill="x", expand=True)
 
-    # Ampel
-    led_canvas = tk.Canvas(entry_frame, width=22, height=22, highlightthickness=0, bg=bg, borderwidth=0)
+    led_canvas = tk.Canvas(key_frame, width=22, height=22, highlightthickness=0, bg=bg, borderwidth=0)
     led_canvas.pack(side="left", padx=(8, 4))
     led_circle = led_canvas.create_oval(3, 3, 19, 19, fill=_LED_COLOR_IDLE, outline="#444444", width=1)
 
     show_var = tk.BooleanVar(value=False)
     def toggle_show() -> None:
         entry.config(show="" if show_var.get() else "*")
-    ttk.Checkbutton(entry_frame, text="Zeigen", variable=show_var, command=toggle_show).pack(side="left", padx=(4, 0))
+    ttk.Checkbutton(key_frame, text="Zeigen", variable=show_var, command=toggle_show).pack(side="left", padx=(4, 0))
 
-    test_btn = ttk.Button(entry_frame, text="Testen")
+    test_btn = ttk.Button(key_frame, text="Testen")
     test_btn.pack(side="left", padx=(8, 0))
 
     ttk.Label(
         main, text="Erhaeltlich unter https://platform.openai.com/api-keys", foreground="gray",
-    ).pack(anchor="w", pady=(6, 0))
+    ).pack(anchor="w", pady=(4, 0))
 
-    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=14)
+    key_status_var = tk.StringVar(value="Noch nicht getestet.")
+    key_status_lbl = ttk.Label(main, textvariable=key_status_var, foreground="gray")
+    key_status_lbl.pack(anchor="w", pady=(6, 0))
 
-    # Status-Zeile
-    status_var = tk.StringVar(value="Noch nicht getestet.")
-    status_color_var = tk.StringVar(value="gray")
-    status_lbl = ttk.Label(main, textvariable=status_var, foreground="gray")
-    status_lbl.pack(anchor="w")
-
-    def set_led(color: str, status_text: str, fg: str = "gray") -> None:
+    def set_led(color: str, text: str, fg: str = "gray") -> None:
         led_canvas.itemconfig(led_circle, fill=color)
-        status_var.set(status_text)
-        status_lbl.config(foreground=fg)
+        key_status_var.set(text)
+        key_status_lbl.config(foreground=fg)
 
-    # Initial-LED basierend auf bisherigem Key
     if current_key:
         set_led(_LED_COLOR_IDLE, "Bisher nicht getestet — Testen druecken.", "gray")
     else:
         set_led(_LED_COLOR_IDLE, "Kein Key hinterlegt.", "gray")
 
-    def run_test() -> None:
+    def run_api_test() -> None:
         key = key_var.get().strip()
         if not key:
             set_led(_LED_COLOR_FAIL, "Kein Key eingegeben.", _LED_COLOR_FAIL)
@@ -198,23 +241,139 @@ def show_config_dialog(
 
         threading.Thread(target=worker, args=(key,), daemon=True).start()
 
-    test_btn.config(command=run_test)
+    test_btn.config(command=run_api_test)
 
-    # Button-Zeile
+    def on_key_change(*_args: Any) -> None:
+        new = key_var.get().strip()
+        if new != last_tested_key["value"]:
+            if new:
+                set_led(_LED_COLOR_IDLE, "Geaendert — zum Pruefen Testen druecken.", "gray")
+            else:
+                set_led(_LED_COLOR_IDLE, "Kein Key eingegeben.", "gray")
+    key_var.trace_add("write", on_key_change)
+
+    # ------------------------------------------------------------
+    # Sektion Mikrofon
+    # ------------------------------------------------------------
+
+    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=16)
+
+    ttk.Label(main, text="Mikrofon", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+
+    devices = list_input_devices()
+    device_labels: list[str] = [_DEFAULT_DEVICE_LABEL]
+    device_values: list[Optional[str]] = [None]
+    for d in devices:
+        label = f"{d['name']}  ·  {d['channels']} ch"
+        if d["sample_rate"]:
+            label += f"  ·  {d['sample_rate']} Hz"
+        device_labels.append(label)
+        device_values.append(d["name"])
+
+    # Aktuell gewaehltes Device finden
+    initial_idx = 0
+    if current_device:
+        for i, v in enumerate(device_values):
+            if v == current_device:
+                initial_idx = i
+                break
+
+    ttk.Label(
+        main,
+        text=f"Aktuell: {device_labels[initial_idx] if initial_idx else _DEFAULT_DEVICE_LABEL}",
+        foreground="gray",
+    ).pack(anchor="w", pady=(2, 8))
+
+    mic_frame = ttk.Frame(main)
+    mic_frame.pack(fill="x")
+
+    device_combo = ttk.Combobox(
+        mic_frame,
+        values=device_labels,
+        width=55,
+        state="readonly",
+    )
+    device_combo.current(initial_idx)
+    device_combo.pack(side="left", fill="x", expand=True)
+
+    mic_test_btn = ttk.Button(mic_frame, text="Mikro testen")
+    mic_test_btn.pack(side="left", padx=(8, 0))
+
+    # Level-Anzeige
+    level_frame = ttk.Frame(main)
+    level_frame.pack(fill="x", pady=(8, 0))
+
+    level_var = tk.IntVar(value=0)
+    level_bar = ttk.Progressbar(level_frame, variable=level_var, maximum=100, length=400, mode="determinate")
+    level_bar.pack(side="left")
+
+    mic_status_var = tk.StringVar(value="Nicht getestet.")
+    mic_status_lbl = ttk.Label(level_frame, textvariable=mic_status_var, foreground="gray")
+    mic_status_lbl.pack(side="left", padx=(8, 0))
+
+    def set_mic_status(text: str, color: str = "gray") -> None:
+        mic_status_var.set(text)
+        mic_status_lbl.config(foreground=color)
+
+    def run_mic_test() -> None:
+        idx = device_combo.current()
+        device = device_values[idx] if 0 <= idx < len(device_values) else None
+        set_mic_status("Nimm 2s auf … bitte sprechen", "#b08400")
+        level_var.set(0)
+        mic_test_btn.config(state="disabled")
+
+        def worker() -> None:
+            try:
+                peak, rms = record_peak(device, duration_s=2.0)
+                def done() -> None:
+                    pct = int(peak * 100)
+                    level_var.set(pct)
+                    if peak < 0.005:
+                        set_mic_status(f"Kein Signal (Peak {peak:.4f}). Stumm-/Gain pruefen.", _LED_COLOR_FAIL)
+                    elif peak < 0.03:
+                        set_mic_status(f"Sehr leise (Peak {peak:.3f}). Lauter sprechen?", "#b08400")
+                    else:
+                        set_mic_status(f"OK — Peak {peak:.2f}, RMS {rms:.3f}", _LED_COLOR_OK)
+                    mic_test_btn.config(state="normal")
+                root.after(0, done)
+            except Exception as exc:
+                logger.exception("Mikro-Test fehlgeschlagen")
+                def done_err() -> None:
+                    set_mic_status(f"Fehler: {exc}", _LED_COLOR_FAIL)
+                    mic_test_btn.config(state="normal")
+                root.after(0, done_err)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    mic_test_btn.config(command=run_mic_test)
+
+    # ------------------------------------------------------------
+    # Buttons
+    # ------------------------------------------------------------
+
+    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=16)
+
     btn_frame = ttk.Frame(main)
     btn_frame.pack(fill="x", side="bottom")
 
+    def collect_device() -> Optional[str]:
+        idx = device_combo.current()
+        if 0 <= idx < len(device_values):
+            return device_values[idx]
+        return None
+
     def do_save() -> None:
         new_key = key_var.get().strip()
+        new_device = collect_device()
+
         if not new_key:
             set_led(_LED_COLOR_FAIL, "API-Key darf nicht leer sein.", _LED_COLOR_FAIL)
             return
 
-        # Wenn dieser Key noch nicht getestet wurde ODER der Test fehlgeschlagen ist, warnen
         if last_tested_key["value"] != new_key:
             if not messagebox.askyesno(
                 "Nicht getestet",
-                "Der Key wurde noch nicht auf Verbindung getestet.\n\nTrotzdem speichern?",
+                "Der API-Key wurde noch nicht auf Verbindung getestet.\n\nTrotzdem speichern?",
                 parent=root,
             ):
                 return
@@ -237,14 +396,14 @@ def show_config_dialog(
         try:
             save_api_key_to_env(env_path, new_key)
         except Exception as exc:
-            logger.exception("Speichern fehlgeschlagen")
+            logger.exception("API-Key Speichern fehlgeschlagen")
             set_led(_LED_COLOR_FAIL, f"Speichern fehlgeschlagen: {exc}", _LED_COLOR_FAIL)
             return
 
         saved_flag["value"] = True
         if on_saved:
             try:
-                on_saved(new_key)
+                on_saved({"api_key": new_key, "device": new_device})
             except Exception:
                 logger.exception("on_saved-Callback schlug fehl")
         root.destroy()
@@ -255,20 +414,9 @@ def show_config_dialog(
     ttk.Button(btn_frame, text="Abbrechen", command=do_cancel).pack(side="right", padx=(8, 0))
     ttk.Button(btn_frame, text="Speichern", command=do_save).pack(side="right")
 
-    # Enter im Entry = Testen (bequem), Strg+S = Speichern
-    entry.bind("<Return>", lambda _e: run_test())
+    entry.bind("<Return>", lambda _e: run_api_test())
     root.bind("<Control-s>", lambda _e: do_save())
     root.bind("<Escape>", lambda _e: do_cancel())
-
-    # Ampel zuruecksetzen wenn Key editiert wird
-    def on_key_change(*_args) -> None:
-        new = key_var.get().strip()
-        if new != last_tested_key["value"]:
-            if new:
-                set_led(_LED_COLOR_IDLE, "Geaendert — zum Pruefen Testen druecken.", "gray")
-            else:
-                set_led(_LED_COLOR_IDLE, "Kein Key eingegeben.", "gray")
-    key_var.trace_add("write", on_key_change)
 
     entry.focus_set()
     entry.icursor("end")

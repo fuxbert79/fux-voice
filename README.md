@@ -45,6 +45,7 @@ Derselbe Einzeiler — das Script überschreibt die installierte Version.
   - `Esc` — Aufnahme verwerfen (nur während aktiver Aufnahme)
   - Anpassbar via `%LOCALAPPDATA%\fux-voice\config.json`
 - **API-Key-Ampel** — Test-Button im Konfig-Dialog prüft sofort, ob der OpenAI-Key & Verbindung funktionieren
+- **Mikrofon-Auswahl** — Dropdown aller Eingabegeräte + Pegel-Anzeige, Wechsel live ohne Neustart
 - **Über-Dialog** — Tray-Menü → Version, Build-Datum, Credits
 - **Konfiguration im Tray** — API-Key via Rechtsklick-Menü hinterlegen, kein Neustart
 - **Clipboard-Paste** — universelles Einfügen, Zwischenablage wird wiederhergestellt
