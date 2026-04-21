@@ -21,6 +21,7 @@ from audio_recorder import AudioRecorder
 from config import ENV_PATH, ASSETS_DIR
 from config_dialog import show_config_dialog
 from hotkey_listener import HotkeyListener
+from status_window import StatusWindow
 from text_injector import TextInjector
 from transcriber import WhisperTranscriber
 
@@ -69,6 +70,7 @@ class FuxVoiceTrayApp:
         self.transcriber: Optional[WhisperTranscriber] = None
         self._rebuild_transcriber()
         self._config_dialog_open = False
+        self._status_window = StatusWindow()
         self.injector = TextInjector(
             paste_delay_ms=config["output"]["paste_delay_ms"],
             restore_clipboard=config["output"]["restore_clipboard"],
@@ -110,6 +112,20 @@ class FuxVoiceTrayApp:
             self._tray.icon = self._render_icon(new_state)
             self._tray.title = _STATE_TOOLTIPS[new_state]
         logger.info("State → %s", new_state.value)
+        self._update_status_window(new_state)
+
+    def _update_status_window(self, new_state: State) -> None:
+        try:
+            if new_state == State.IDLE:
+                self._status_window.hide()
+            elif new_state == State.RECORDING:
+                self._status_window.show("recording")
+            elif new_state == State.PAUSED:
+                self._status_window.set_state("paused")
+            elif new_state == State.TRANSCRIBING:
+                self._status_window.set_state("transcribing")
+        except Exception:
+            logger.exception("Status-Fenster-Update fehlgeschlagen")
 
     @property
     def state(self) -> State:
@@ -212,6 +228,7 @@ class FuxVoiceTrayApp:
             show_config_dialog(
                 env_path=ENV_PATH,
                 current_device=self.config.get("audio", {}).get("device"),
+                current_model=self.config.get("whisper", {}).get("model"),
                 on_saved=self._on_config_saved,
                 icon_path=icon_path if icon_path.exists() else None,
             )
@@ -223,26 +240,42 @@ class FuxVoiceTrayApp:
     def _on_config_saved(self, updates: dict) -> None:
         """Wird nach Speichern aus dem Konfig-Dialog gerufen.
 
-        updates: {"api_key": str, "device": str|None}
+        updates: {"api_key": str, "device": str|None, "model": str, "autostart": bool}
         """
+        from config import save_user_config
+
         new_key = updates.get("api_key", "")
         new_device = updates.get("device")
+        new_model = updates.get("model")
+
+        config_updates: dict = {}
 
         if new_key:
             logger.info("API-Key aktualisiert")
             self.config["_openai_api_key"] = new_key
-            self._rebuild_transcriber()
 
         old_device = self.config.get("audio", {}).get("device")
         if new_device != old_device:
-            logger.info("Audio-Device geaendert: %r → %r", old_device, new_device)
+            logger.info("Audio-Device: %r → %r", old_device, new_device)
             self.config.setdefault("audio", {})["device"] = new_device
+            config_updates.setdefault("audio", {})["device"] = new_device
+            self._rebuild_recorder()
+
+        old_model = self.config.get("whisper", {}).get("model")
+        if new_model and new_model != old_model:
+            logger.info("Modell: %r → %r", old_model, new_model)
+            self.config.setdefault("whisper", {})["model"] = new_model
+            config_updates.setdefault("whisper", {})["model"] = new_model
+
+        # Transcriber neu bauen wenn Key oder Modell geaendert
+        if new_key or (new_model and new_model != old_model):
+            self._rebuild_transcriber()
+
+        if config_updates:
             try:
-                from config import save_user_config
-                save_user_config({"audio": {"device": new_device}})
+                save_user_config(config_updates)
             except Exception:
                 logger.exception("config.json konnte nicht geschrieben werden")
-            self._rebuild_recorder()
 
     def _rebuild_recorder(self) -> None:
         """Rebaut den AudioRecorder mit aktuellen Audio-Settings.
@@ -265,6 +298,10 @@ class FuxVoiceTrayApp:
         self.hotkeys.stop()
         if self.state != State.IDLE:
             self.recorder.stop(discard=True)
+        try:
+            self._status_window.hide()
+        except Exception:
+            pass
         icon.stop()
 
     def _menu_toggle(self, _icon: TrayIcon, _item) -> None:

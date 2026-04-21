@@ -137,6 +137,22 @@ _LED_COLOR_FAIL = "#dc3545"
 
 _DEFAULT_DEVICE_LABEL = "Standard-Geraet (Windows-Default)"
 
+# Verfuegbare Transkriptions-Modelle (OpenAI)
+_MODELS = [
+    {
+        "id": "gpt-4o-transcribe",
+        "label": "gpt-4o-transcribe · beste Qualitaet · $0.006/min",
+    },
+    {
+        "id": "gpt-4o-mini-transcribe",
+        "label": "gpt-4o-mini-transcribe · schnell + guenstig · $0.003/min",
+    },
+    {
+        "id": "whisper-1",
+        "label": "whisper-1 · Legacy-Modell · $0.006/min",
+    },
+]
+
 
 # ============================================================
 # Dialog
@@ -145,6 +161,7 @@ _DEFAULT_DEVICE_LABEL = "Standard-Geraet (Windows-Default)"
 def show_config_dialog(
     env_path: Path,
     current_device: Optional[str] = None,
+    current_model: Optional[str] = None,
     on_saved: Optional[Callable[[dict[str, Any]], None]] = None,
     icon_path: Optional[Path] = None,
 ) -> bool:
@@ -154,7 +171,7 @@ def show_config_dialog(
 
     root = tk.Tk()
     root.title("fux-voice — Konfiguration")
-    root.geometry("660x500")
+    root.geometry("680x680")
     root.resizable(False, False)
     try:
         root.attributes("-topmost", True)
@@ -348,6 +365,54 @@ def show_config_dialog(
     mic_test_btn.config(command=run_mic_test)
 
     # ------------------------------------------------------------
+    # Sektion Transkriptions-Modell
+    # ------------------------------------------------------------
+
+    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=16)
+
+    ttk.Label(main, text="Transkriptions-Modell", font=("Segoe UI", 11, "bold")).pack(anchor="w")
+
+    model_ids = [m["id"] for m in _MODELS]
+    model_labels = [m["label"] for m in _MODELS]
+    initial_model_idx = 0
+    if current_model and current_model in model_ids:
+        initial_model_idx = model_ids.index(current_model)
+
+    model_combo = ttk.Combobox(main, values=model_labels, width=60, state="readonly")
+    model_combo.current(initial_model_idx)
+    model_combo.pack(fill="x", pady=(8, 0))
+
+    ttk.Label(
+        main,
+        text="gpt-4o-transcribe ist empfohlen — beste Qualitaet bei gleichem Preis wie whisper-1.",
+        foreground="gray",
+    ).pack(anchor="w", pady=(4, 0))
+
+    # ------------------------------------------------------------
+    # Sektion Autostart
+    # ------------------------------------------------------------
+
+    ttk.Separator(main, orient="horizontal").pack(fill="x", pady=16)
+
+    from autostart import get_autostart_target, is_autostart_enabled, set_autostart
+
+    autostart_var = tk.BooleanVar(value=is_autostart_enabled())
+    autostart_check = ttk.Checkbutton(
+        main, text="fux-voice automatisch mit Windows starten",
+        variable=autostart_var,
+    )
+    autostart_check.pack(anchor="w")
+
+    _current_target = get_autostart_target()
+    autostart_info = ttk.Label(
+        main,
+        text=(f"Aktuell: {_current_target}" if _current_target else
+              "Nicht aktiviert — Haken setzen, dann Speichern."),
+        foreground="gray",
+    )
+    autostart_info.pack(anchor="w", pady=(2, 0))
+
+    # ------------------------------------------------------------
     # Buttons
     # ------------------------------------------------------------
 
@@ -362,9 +427,17 @@ def show_config_dialog(
             return device_values[idx]
         return None
 
+    def collect_model() -> str:
+        idx = model_combo.current()
+        if 0 <= idx < len(model_ids):
+            return model_ids[idx]
+        return model_ids[0]
+
     def do_save() -> None:
         new_key = key_var.get().strip()
         new_device = collect_device()
+        new_model = collect_model()
+        new_autostart = autostart_var.get()
 
         if not new_key:
             set_led(_LED_COLOR_FAIL, "API-Key darf nicht leer sein.", _LED_COLOR_FAIL)
@@ -400,10 +473,21 @@ def show_config_dialog(
             set_led(_LED_COLOR_FAIL, f"Speichern fehlgeschlagen: {exc}", _LED_COLOR_FAIL)
             return
 
+        # Autostart setzen
+        try:
+            set_autostart(new_autostart)
+        except Exception:
+            logger.exception("Autostart konnte nicht gesetzt werden")
+
         saved_flag["value"] = True
         if on_saved:
             try:
-                on_saved({"api_key": new_key, "device": new_device})
+                on_saved({
+                    "api_key": new_key,
+                    "device": new_device,
+                    "model": new_model,
+                    "autostart": new_autostart,
+                })
             except Exception:
                 logger.exception("on_saved-Callback schlug fehl")
         root.destroy()
