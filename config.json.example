@@ -1,0 +1,27 @@
+{
+  "hotkeys": {
+    "start_stop": "ctrl+alt+space",
+    "pause_resume": "ctrl+alt+p",
+    "cancel": "esc"
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "device": null
+  },
+  "whisper": {
+    "model": "whisper-1",
+    "language": "de",
+    "prompt": "Diktat auf Deutsch. Achte auf korrekte Groß- und Kleinschreibung sowie Satzzeichen."
+  },
+  "output": {
+    "paste_method": "clipboard",
+    "paste_delay_ms": 50,
+    "restore_clipboard": true,
+    "add_trailing_space": true
+  },
+  "ui": {
+    "play_sounds": true,
+    "show_notifications": true
+  }
+}
