@@ -31,29 +31,32 @@ _MODIFIER_ALIASES = {
 }
 
 
-def _normalize_combo(combo: str) -> str:
-    """'windows+ö' → 'windows+#39'
+def _normalize_combo(combo: str):
+    """'windows+ö' → ('windows', 39)
 
-    - Modifier-Aliases werden vereinheitlicht.
-    - Umlaute werden zu '#NN' Scan-Code-Notation umgesetzt.
-    - '#NN'-Prefix bleibt unveraendert (Direkt-Angabe).
-    - Alles andere (a, space, f9, esc) bleibt wie in keyboard-Lib erwartet.
+    Gibt einen TUPLE zurueck (hashable fuer keyboard._hotkeys dict).
+    String-Parts (Modifier, Named Keys wie 'space', 'f9', 'esc') bleiben
+    Strings; Umlaute werden zu ints (Scan-Codes) umgesetzt. Die
+    keyboard-Library parst intern jeden Part via key_to_scan_codes():
+    ints werden direkt als Scan-Code uebernommen, strings aufgeloest.
     """
     parts = [p.strip() for p in combo.split("+") if p.strip()]
-    out = []
+    out: list = []
     for part in parts:
         low = part.lower()
         if low in _MODIFIER_ALIASES:
             out.append(_MODIFIER_ALIASES[low])
         elif low in _UMLAUT_SCAN_CODES:
-            out.append(f"#{_UMLAUT_SCAN_CODES[low]}")
+            out.append(_UMLAUT_SCAN_CODES[low])  # int
         elif low.startswith("#") and low[1:].isdigit():
-            out.append(low)
+            out.append(int(low[1:]))  # int
         else:
             out.append(low)
     if not out:
         raise ValueError(f"Leerer Hotkey: '{combo}'")
-    return "+".join(out)
+    if len(out) == 1 and isinstance(out[0], str):
+        return out[0]
+    return tuple(out)
 
 
 class HotkeyListener:
@@ -101,12 +104,12 @@ class HotkeyListener:
                 trigger_on_release=False,
             )
         except Exception:
-            logger.exception("Hotkey %s (%s → %s) konnte nicht registriert werden",
+            logger.exception("Hotkey %s (%s → %r) konnte nicht registriert werden",
                              name, combo, normalized)
             return
 
         self._handles.append(handle)
-        logger.info("Registriert: %-12s = %-18s → %-20s suppress=%s",
+        logger.info("Registriert: %-12s = %-18s → %r suppress=%s",
                     name, combo, normalized, suppress)
 
     def start(self) -> None:
@@ -128,7 +131,7 @@ class HotkeyListener:
                 suppress=False,
                 trigger_on_release=False,
             )
-            logger.info("Cancel-Hotkey aktiv: %s → %s", self.cancel_combo, normalized)
+            logger.info("Cancel-Hotkey aktiv: %s → %r", self.cancel_combo, normalized)
         except Exception:
             logger.exception("Cancel-Hotkey %s konnte nicht registriert werden",
                              self.cancel_combo)

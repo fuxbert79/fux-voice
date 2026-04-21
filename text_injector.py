@@ -28,10 +28,13 @@ class TextInjector:
 
     def inject(self, text: str) -> None:
         if not text:
+            logger.info("inject: leerer Text, ueberspringe")
             return
 
         if self.add_trailing_space and not text.endswith((" ", "\n", "\t")):
             text = text + " "
+
+        logger.info("inject: %d Zeichen → Clipboard + Ctrl+V", len(text))
 
         previous_clipboard: str | None = None
         if self.restore_clipboard:
@@ -40,11 +43,17 @@ class TextInjector:
             except Exception:
                 logger.exception("Zwischenablage-Backup fehlgeschlagen")
 
-        pyperclip.copy(text)
+        try:
+            pyperclip.copy(text)
+        except Exception:
+            logger.exception("pyperclip.copy fehlgeschlagen — Text NICHT im Clipboard!")
+            return
+
         time.sleep(self.paste_delay_s)
 
         try:
             keyboard.send("ctrl+v")
+            logger.info("inject: Ctrl+V gesendet")
         except Exception:
             logger.exception("Strg+V konnte nicht gesendet werden")
             return

@@ -2,10 +2,16 @@
 
 Frameless tkinter-Toplevel, zeigt Status-Indikator, Statustext und
 Lauf-Timer. Oeffnet bei Aufnahme-Start, schliesst sich bei IDLE.
+
+WICHTIG — WS_EX_NOACTIVATE:
+Ohne diesen Flag klaut tkinter beim Erstellen des Fensters den Input-Fokus.
+Das fuehrt dazu, dass Strg+V (Text-Injection) ins Status-Fenster geht statt
+in die User-App. Via ctypes auf Windows wird NOACTIVATE gesetzt.
 """
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 import tkinter as tk
@@ -122,11 +128,22 @@ class StatusWindow:
             except Exception:
                 pass
 
+            # Verhindere, dass das Status-Fenster auf der Taskbar erscheint
+            # und den Fokus stiehlt.
+            try:
+                self._root.attributes("-toolwindow", True)
+            except Exception:
+                pass
+
             sw = self._root.winfo_screenwidth()
             sh = self._root.winfo_screenheight()
             x = sw - self.WIDTH - self.MARGIN_RIGHT
             y = sh - self.HEIGHT - self.MARGIN_BOTTOM
             self._root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
+
+            # Win32: WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW damit das Fenster
+            # den Input-Fokus NICHT uebernimmt und nicht in Alt-Tab auftaucht.
+            self._root.after(50, self._apply_noactivate_style)
 
             # Aussen-Rahmen (simuliert duennen Border)
             outer = tk.Frame(self._root, bg=_BORDER_COLOR, bd=0)
@@ -180,6 +197,29 @@ class StatusWindow:
         except Exception:
             logger.exception("Status-Fenster UI-Thread crashed")
             self._ui_ready.set()
+
+    def _apply_noactivate_style(self) -> None:
+        """Setzt WS_EX_NOACTIVATE via Win32 API (Windows-only)."""
+        if not sys.platform.startswith("win"):
+            return
+        if self._root is None:
+            return
+        try:
+            import ctypes
+            GWL_EXSTYLE = -20
+            WS_EX_NOACTIVATE = 0x08000000
+            WS_EX_TOOLWINDOW = 0x00000080
+
+            # wm_frame() liefert HWND als Hex-String auf Windows
+            hwnd = int(self._root.wm_frame(), 16)
+            user32 = ctypes.windll.user32
+            cur_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            new_style = cur_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+            logger.debug("WS_EX_NOACTIVATE gesetzt (hwnd=%x, style=%x→%x)",
+                         hwnd, cur_style, new_style)
+        except Exception:
+            logger.exception("WS_EX_NOACTIVATE konnte nicht gesetzt werden")
 
     def _tick(self) -> None:
         if not self._running or self._root is None:
