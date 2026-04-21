@@ -1,25 +1,40 @@
-"""Globale Hotkeys mit Event-Suppression via keyboard-Library.
+"""Globale Hotkeys via keyboard.hook(suppress=True) mit selektivem Return.
 
-Umlaute als Scan-Code-Syntax (`#NN`) — umgeht den fragilen keyboard-Parser,
-der auf DE-Tastaturen Buchstaben wie 'ö' nicht zuverlaessig aufloest.
+Warum nicht keyboard.add_hotkey?
+  Der interne String-Parser der keyboard-Library nutzt lokalisierte
+  Key-Namen ('linke windows' statt 'left windows' auf deutschem Windows).
+  Das fuehrt dazu, dass zwar add_hotkey ohne Fehler durchlaeuft, der
+  interne Event-Matcher aber nie trifft.
 
-Beispiel: 'windows+ö' → 'windows+#39' (Scan-Code 39 = Ö auf DE-Layout)
+Dieser Ansatz:
+  Ein einziger Low-Level-Hook, selbst geschriebenes Matching gegen
+  Scan-Codes. Suppress wird pro Event via Return-Value entschieden
+  (True = event durchlassen, False = blockieren).
 """
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Callable, Optional
 
 import keyboard
 
 logger = logging.getLogger(__name__)
 
-# Windows Scan-Codes fuer DE-Tastatur (positional)
+# Positionale Scan-Codes — layout-unabhaengig, gueltig auf Windows
 _UMLAUT_SCAN_CODES = {
-    "ö": 39,   # 0x27
-    "ä": 40,   # 0x28
-    "ü": 26,   # 0x1A
-    "ß": 12,   # 0x0C
+    "ö": 39,
+    "ä": 40,
+    "ü": 26,
+    "ß": 12,
+}
+
+# Scan-Codes aller Modifier-Varianten (left/right)
+_MODIFIER_SCAN_CODES = {
+    "ctrl":    {29, 97},   # 97 ist der "extended" RCtrl
+    "alt":     {56, 100},  # LAlt, RAlt (AltGr)
+    "shift":   {42, 54},   # LShift, RShift
+    "windows": {91, 92},   # LWin, RWin
 }
 
 _MODIFIER_ALIASES = {
@@ -30,33 +45,75 @@ _MODIFIER_ALIASES = {
     "command": "windows", "meta": "windows", "super": "windows",
 }
 
+_NAMED_KEY_SCAN_CODES = {
+    "esc": 1, "escape": 1,
+    "space": 57,
+    "enter": 28, "return": 28,
+    "tab": 15,
+    "backspace": 14,
+    "delete": 83, "del": 83,
+    "insert": 82, "ins": 82,
+    "home": 71, "end": 79,
+    "pageup": 73, "page_up": 73, "page up": 73,
+    "pagedown": 81, "page_down": 81, "page down": 81,
+    "up": 72, "down": 80, "left": 75, "right": 77,
+    "pause": 69,
+    "caps lock": 58, "caps_lock": 58,
+    "scroll lock": 70, "scroll_lock": 70,
+}
+# F1..F12
+for _i, _code in enumerate([59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88], 1):
+    _NAMED_KEY_SCAN_CODES[f"f{_i}"] = _code
 
-def _normalize_combo(combo: str):
-    """'windows+ö' → ('windows', 39)
 
-    Gibt einen TUPLE zurueck (hashable fuer keyboard._hotkeys dict).
-    String-Parts (Modifier, Named Keys wie 'space', 'f9', 'esc') bleiben
-    Strings; Umlaute werden zu ints (Scan-Codes) umgesetzt. Die
-    keyboard-Library parst intern jeden Part via key_to_scan_codes():
-    ints werden direkt als Scan-Code uebernommen, strings aufgeloest.
-    """
+def _resolve_target(token: str) -> Optional[int]:
+    """'ö' → 39, 'f9' → 67, '#39' → 39, 'a' → via keyboard lib."""
+    low = token.lower()
+    if low in _UMLAUT_SCAN_CODES:
+        return _UMLAUT_SCAN_CODES[low]
+    if low.startswith("#") and low[1:].isdigit():
+        return int(low[1:])
+    if low in _NAMED_KEY_SCAN_CODES:
+        return _NAMED_KEY_SCAN_CODES[low]
+    if len(low) == 1:
+        try:
+            codes = keyboard.key_to_scan_codes(low)
+            return codes[0] if codes else None
+        except Exception:
+            return None
+    return None
+
+
+def _parse_combo(combo: str) -> tuple[set, int]:
+    """'windows+ö' → ({'windows'}, 39)"""
     parts = [p.strip() for p in combo.split("+") if p.strip()]
-    out: list = []
+    modifiers: set = set()
+    target: Optional[int] = None
     for part in parts:
         low = part.lower()
         if low in _MODIFIER_ALIASES:
-            out.append(_MODIFIER_ALIASES[low])
-        elif low in _UMLAUT_SCAN_CODES:
-            out.append(_UMLAUT_SCAN_CODES[low])  # int
-        elif low.startswith("#") and low[1:].isdigit():
-            out.append(int(low[1:]))  # int
+            modifiers.add(_MODIFIER_ALIASES[low])
         else:
-            out.append(low)
-    if not out:
-        raise ValueError(f"Leerer Hotkey: '{combo}'")
-    if len(out) == 1 and isinstance(out[0], str):
-        return out[0]
-    return tuple(out)
+            t = _resolve_target(part)
+            if t is None:
+                raise ValueError(f"Unbekannter Key: {part!r} in {combo!r}")
+            target = t
+    if target is None:
+        raise ValueError(f"Kein Target-Key in {combo!r}")
+    return modifiers, target
+
+
+class _Binding:
+    __slots__ = ("modifiers", "target_scan_code", "callback", "name", "suppress", "held")
+
+    def __init__(self, modifiers: set, target: int,
+                 callback: Callable[[], None], name: str, suppress: bool) -> None:
+        self.modifiers = modifiers
+        self.target_scan_code = target
+        self.callback = callback
+        self.name = name
+        self.suppress = suppress
+        self.held = False
 
 
 class HotkeyListener:
@@ -76,100 +133,135 @@ class HotkeyListener:
         self.pause_resume_combo = pause_resume_combo
         self.cancel_combo = cancel_combo
 
-        self._handles: list = []
-        self._cancel_handle = None
+        self._bindings: list[_Binding] = []
+        self._cancel_binding: Optional[_Binding] = None
+        self._modifiers_pressed: set = set()
+        self._hook_handle = None
 
-    def _safe(self, fn: Callable[[], None], name: str) -> Callable[[], None]:
-        def wrapped() -> None:
-            logger.info("Hotkey feuert: %s", name)
+    def _active_bindings(self) -> list[_Binding]:
+        if self._cancel_binding:
+            return self._bindings + [self._cancel_binding]
+        return self._bindings
+
+    @staticmethod
+    def _scancode_to_modifier(sc: int) -> Optional[str]:
+        for name, codes in _MODIFIER_SCAN_CODES.items():
+            if sc in codes:
+                return name
+        return None
+
+    def _on_event(self, event) -> bool:
+        """Return True = Event durchlassen, False = blockieren."""
+        try:
+            sc = event.scan_code
+            etype = event.event_type
+
+            # Modifier-State tracken (immer durchlassen)
+            mod = self._scancode_to_modifier(sc)
+            if mod:
+                if etype == keyboard.KEY_DOWN:
+                    self._modifiers_pressed.add(mod)
+                elif etype == keyboard.KEY_UP:
+                    self._modifiers_pressed.discard(mod)
+                return True
+
+            # KEY_UP: held-Flag zuruecksetzen
+            if etype == keyboard.KEY_UP:
+                for b in self._active_bindings():
+                    if b.target_scan_code == sc:
+                        b.held = False
+                return True
+
+            if etype != keyboard.KEY_DOWN:
+                return True
+
+            # KEY_DOWN: bindings checken
+            for b in self._active_bindings():
+                if b.target_scan_code != sc:
+                    continue
+                if not b.modifiers.issubset(self._modifiers_pressed):
+                    # Richtiger Key, aber Modifier-Stand passt nicht
+                    continue
+
+                # Match — Auto-repeat nur suppressen, nicht nochmal feuern
+                if b.held:
+                    return not b.suppress
+
+                b.held = True
+                logger.info("Hotkey feuert: %s", b.name)
+                # Callback in Thread ausfuehren, damit der Hook nicht blockiert
+                threading.Thread(target=self._run_callback, args=(b,), daemon=True).start()
+
+                return not b.suppress
+
+            return True
+        except Exception:
+            logger.exception("Fehler in _on_event")
+            return True
+
+    def _run_callback(self, b: _Binding) -> None:
+        try:
+            b.callback()
+        except Exception:
+            logger.exception("Fehler im Hotkey-Handler %s", b.name)
+
+    def _build_bindings(self) -> None:
+        self._bindings = []
+        for combo, cb, name, suppress in [
+            (self.start_stop_combo, self._on_start_stop, "start_stop", True),
+            (self.pause_resume_combo, self._on_pause_resume, "pause_resume", True),
+        ]:
             try:
-                fn()
+                mods, target = _parse_combo(combo)
+                self._bindings.append(_Binding(mods, target, cb, name, suppress))
+                logger.info(
+                    "Registriert: %-12s = %-18s (mods=%s, scan_code=%d, suppress=%s)",
+                    name, combo, sorted(mods), target, suppress,
+                )
             except Exception:
-                logger.exception("Fehler im Hotkey-Handler %s", name)
-        return wrapped
-
-    def _register(self, combo: str, callback: Callable[[], None], name: str,
-                  suppress: bool) -> None:
-        try:
-            normalized = _normalize_combo(combo)
-        except Exception:
-            logger.exception("Hotkey %s (%s) konnte nicht normalisiert werden", name, combo)
-            return
-
-        try:
-            handle = keyboard.add_hotkey(
-                normalized,
-                self._safe(callback, name),
-                suppress=suppress,
-                trigger_on_release=False,
-            )
-        except Exception:
-            logger.exception("Hotkey %s (%s → %r) konnte nicht registriert werden",
-                             name, combo, normalized)
-            return
-
-        self._handles.append(handle)
-        logger.info("Registriert: %-12s = %-18s → %r suppress=%s",
-                    name, combo, normalized, suppress)
+                logger.exception("Hotkey %s=%s konnte nicht geparst werden", name, combo)
 
     def start(self) -> None:
-        # Haupt-Hotkeys MIT suppress → kein Zeichen-Echo ins aktive Fenster
-        self._register(self.start_stop_combo, self._on_start_stop, "start_stop", suppress=True)
-        self._register(self.pause_resume_combo, self._on_pause_resume, "pause_resume", suppress=True)
-        logger.info("Hotkeys aktiv (Cancel %s wird nur waehrend Aufnahme registriert)",
-                    self.cancel_combo)
+        self._build_bindings()
+        try:
+            self._hook_handle = keyboard.hook(self._on_event, suppress=True)
+            logger.info("Low-Level-Hook aktiv (selektives suppress)")
+        except Exception:
+            logger.exception("Hook konnte nicht installiert werden")
 
     def enable_cancel(self) -> None:
-        if self._cancel_handle is not None:
+        if self._cancel_binding is not None:
             return
         try:
-            normalized = _normalize_combo(self.cancel_combo)
-            # ESC ohne suppress — sonst schluckt fux-voice ESC in allen Apps
-            self._cancel_handle = keyboard.add_hotkey(
-                normalized,
-                self._safe(self._on_cancel, "cancel"),
-                suppress=False,
-                trigger_on_release=False,
-            )
-            logger.info("Cancel-Hotkey aktiv: %s → %r", self.cancel_combo, normalized)
+            mods, target = _parse_combo(self.cancel_combo)
+            self._cancel_binding = _Binding(mods, target, self._on_cancel, "cancel", suppress=False)
+            logger.info("Cancel-Hotkey aktiv: %s (scan_code=%d)", self.cancel_combo, target)
         except Exception:
-            logger.exception("Cancel-Hotkey %s konnte nicht registriert werden",
-                             self.cancel_combo)
+            logger.exception("Cancel-Hotkey %s konnte nicht geparst werden", self.cancel_combo)
 
     def disable_cancel(self) -> None:
-        if self._cancel_handle is not None:
-            try:
-                keyboard.remove_hotkey(self._cancel_handle)
-            except Exception:
-                pass
-            self._cancel_handle = None
+        self._cancel_binding = None
 
     def stop(self) -> None:
-        for h in self._handles:
+        self._bindings = []
+        self._cancel_binding = None
+        if self._hook_handle is not None:
             try:
-                keyboard.remove_hotkey(h)
+                keyboard.unhook(self._hook_handle)
             except Exception:
                 pass
-        self._handles = []
-        self.disable_cancel()
-        try:
-            keyboard.unhook_all_hotkeys()
-        except Exception:
-            pass
+            self._hook_handle = None
 
+
+# -----------------------------------------------------------------------
+# Diagnose-Hilfe
+# -----------------------------------------------------------------------
 
 def start_diagnostic(duration_s: int = 30) -> None:
-    """Loggt alle KEY_DOWN-Events fuer N Sekunden.
-
-    Zweck: Herausfinden, welche scan_codes / names / vks die Tastatur
-    tatsaechlich sendet. Hilfreich wenn die hardcoded Scan-Codes
-    (Oe=39, Ae=40) auf einer bestimmten Tastatur anders sind.
-    """
-    import threading
-
+    """Loggt alle KEY_DOWN-Events fuer N Sekunden (parallel zu HotkeyListener)."""
     logger.info("=" * 60)
     logger.info("HOTKEY-DIAGNOSE aktiv fuer %d Sekunden", duration_s)
-    logger.info("Druecke deine gewuenschte Hotkey-Kombination(!)")
+    logger.info("Druecke deine Hotkey-Kombination")
     logger.info("=" * 60)
 
     stop_flag = {"stop": False}
@@ -181,7 +273,7 @@ def start_diagnostic(duration_s: int = 30) -> None:
         if event.event_type != keyboard.KEY_DOWN:
             return
         logger.info(
-            "DIAG KEY_DOWN: scan_code=%s  name=%r  is_keypad=%s",
+            "DIAG KEY_DOWN: scan_code=%-4s name=%-25r is_keypad=%s",
             event.scan_code, event.name, getattr(event, "is_keypad", None),
         )
 
