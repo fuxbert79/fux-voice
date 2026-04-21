@@ -121,15 +121,15 @@ class StatusWindow:
     def _run_ui(self) -> None:
         try:
             self._root = tk.Tk()
+            # SOFORT verstecken, damit kein Fokus-Klau passiert bevor
+            # NOACTIVATE gesetzt ist.
+            self._root.withdraw()
             self._root.overrideredirect(True)
             self._root.attributes("-topmost", True)
             try:
                 self._root.attributes("-alpha", 0.96)
             except Exception:
                 pass
-
-            # Verhindere, dass das Status-Fenster auf der Taskbar erscheint
-            # und den Fokus stiehlt.
             try:
                 self._root.attributes("-toolwindow", True)
             except Exception:
@@ -140,10 +140,6 @@ class StatusWindow:
             x = sw - self.WIDTH - self.MARGIN_RIGHT
             y = sh - self.HEIGHT - self.MARGIN_BOTTOM
             self._root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
-
-            # Win32: WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW damit das Fenster
-            # den Input-Fokus NICHT uebernimmt und nicht in Alt-Tab auftaucht.
-            self._root.after(50, self._apply_noactivate_style)
 
             # Aussen-Rahmen (simuliert duennen Border)
             outer = tk.Frame(self._root, bg=_BORDER_COLOR, bd=0)
@@ -191,6 +187,11 @@ class StatusWindow:
                 font=("Segoe UI", 8),
             ).pack(side="right", anchor="se")
 
+            # Layout fertig → HWND kennen → NOACTIVATE setzen → dann zeigen
+            self._root.update_idletasks()
+            self._apply_noactivate_style()
+            self._root.deiconify()
+
             self._ui_ready.set()
             self._tick()
             self._root.mainloop()
@@ -216,8 +217,7 @@ class StatusWindow:
             cur_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             new_style = cur_style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-            logger.debug("WS_EX_NOACTIVATE gesetzt (hwnd=%x, style=%x→%x)",
-                         hwnd, cur_style, new_style)
+            logger.info("Status-Fenster NOACTIVATE gesetzt (hwnd=%x)", hwnd)
         except Exception:
             logger.exception("WS_EX_NOACTIVATE konnte nicht gesetzt werden")
 

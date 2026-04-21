@@ -81,7 +81,7 @@ class HotkeyListener:
 
     def _safe(self, fn: Callable[[], None], name: str) -> Callable[[], None]:
         def wrapped() -> None:
-            logger.debug("Hotkey feuert: %s", name)
+            logger.info("Hotkey feuert: %s", name)
             try:
                 fn()
             except Exception:

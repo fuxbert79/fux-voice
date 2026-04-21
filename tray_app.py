@@ -24,6 +24,7 @@ from hotkey_listener import HotkeyListener
 from status_window import StatusWindow
 from text_injector import TextInjector
 from transcriber import WhisperTranscriber
+from window_focus import get_foreground_hwnd, get_window_title
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class FuxVoiceTrayApp:
         self._rebuild_transcriber()
         self._config_dialog_open = False
         self._status_window = StatusWindow()
+        self._target_hwnd: int | None = None
         self.injector = TextInjector(
             paste_delay_ms=config["output"]["paste_delay_ms"],
             restore_clipboard=config["output"]["restore_clipboard"],
@@ -157,12 +159,25 @@ class FuxVoiceTrayApp:
             logger.exception("Transkription fehlgeschlagen")
             return
         if text:
-            self.injector.inject(text)
+            self.injector.inject(text, target_hwnd=self._target_hwnd)
+
+    def _capture_target_hwnd(self) -> None:
+        """Merkt sich das aktuell aktive Fenster, um spaeter den Fokus
+        zurueckzusetzen. Wird bei Aufnahme-Start aufgerufen."""
+        hwnd = get_foreground_hwnd()
+        if hwnd:
+            title = get_window_title(hwnd)[:60]
+            logger.info("Ziel-Fenster gemerkt: hwnd=%x (%s)", hwnd, title)
+            self._target_hwnd = hwnd
 
     def _on_hotkey_start_stop(self) -> None:
         with self._work_lock:
             current = self.state
             if current == State.IDLE:
+                # VOR dem State-Wechsel: aktives Fenster merken, solange der
+                # User noch fokussiert ist (Tray-Klick oder Hotkey-Event kann
+                # das verschieben).
+                self._capture_target_hwnd()
                 self._set_state(State.RECORDING)
                 self.hotkeys.enable_cancel()
                 self.recorder.start()
