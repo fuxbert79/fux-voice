@@ -101,12 +101,10 @@ function Install-FuxVoice {
 
     if ($shaAsset) {
         Write-Host "  Verifiziere SHA-256 …"
-        $shaResp = Invoke-WebRequest -Uri $shaAsset.browser_download_url -UseBasicParsing
-        $shaText = if ($shaResp.Content -is [byte[]]) {
-            [System.Text.Encoding]::UTF8.GetString($shaResp.Content)
-        } else {
-            [string]$shaResp.Content
-        }
+        $tmpSha = Join-Path $env:TEMP "$AppName-$([Guid]::NewGuid()).sha256"
+        Invoke-WebRequest -Uri $shaAsset.browser_download_url -OutFile $tmpSha -UseBasicParsing
+        $shaText = [System.IO.File]::ReadAllText($tmpSha, [System.Text.Encoding]::UTF8)
+        Remove-Item $tmpSha -Force -ErrorAction SilentlyContinue
         $expected = ($shaText.Trim() -split '\s+')[0].ToLower()
         $actual   = (Get-FileHash $tmpExe -Algorithm SHA256).Hash.ToLower()
         if ($expected -ne $actual) {
