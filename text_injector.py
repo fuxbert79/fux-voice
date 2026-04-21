@@ -1,22 +1,21 @@
-"""Fuegt Text in das aktive Fenster ein via Clipboard + Strg+V.
+"""Text-Injection via Clipboard + Strg+V (pynput Controller).
 
 Funktioniert universell — auch in Terminals, Browsern, Editoren und
-der Claude Code CLI.
+der Claude Code CLI. Die Zwischenablage wird nach dem Paste
+wiederhergestellt.
 """
 from __future__ import annotations
 
 import logging
 import time
 
-import keyboard
 import pyperclip
+from pynput import keyboard as pk
 
 logger = logging.getLogger(__name__)
 
 
 class TextInjector:
-    """Kapselt Clipboard-basiertes Einfuegen."""
-
     def __init__(
         self,
         paste_delay_ms: int = 50,
@@ -26,9 +25,9 @@ class TextInjector:
         self.paste_delay_s = paste_delay_ms / 1000.0
         self.restore_clipboard = restore_clipboard
         self.add_trailing_space = add_trailing_space
+        self._controller = pk.Controller()
 
     def inject(self, text: str) -> None:
-        """Schreibt Text ins aktive Fenster."""
         if not text:
             return
 
@@ -40,13 +39,15 @@ class TextInjector:
             try:
                 previous_clipboard = pyperclip.paste()
             except Exception:
-                logger.exception("Konnte vorige Zwischenablage nicht lesen")
+                logger.exception("Zwischenablage-Backup fehlgeschlagen")
 
         pyperclip.copy(text)
         time.sleep(self.paste_delay_s)
 
         try:
-            keyboard.send("ctrl+v")
+            with self._controller.pressed(pk.Key.ctrl):
+                self._controller.press("v")
+                self._controller.release("v")
         except Exception:
             logger.exception("Strg+V konnte nicht gesendet werden")
             return
@@ -56,4 +57,4 @@ class TextInjector:
             try:
                 pyperclip.copy(previous_clipboard)
             except Exception:
-                logger.exception("Zwischenablage konnte nicht wiederhergestellt werden")
+                logger.exception("Zwischenablage-Wiederherstellung fehlgeschlagen")

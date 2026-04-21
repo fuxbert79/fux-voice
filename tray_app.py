@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 from pystray import Icon as TrayIcon
 from pystray import Menu, MenuItem
 
+from about_dialog import show_about_dialog
 from audio_recorder import AudioRecorder
 from config import ENV_PATH, ASSETS_DIR
 from config_dialog import show_config_dialog
@@ -188,6 +189,16 @@ class FuxVoiceTrayApp:
                 self.hotkeys.disable_cancel()
                 self._set_state(State.IDLE)
 
+    def _menu_about(self, _icon: TrayIcon, _item) -> None:
+        threading.Thread(target=self._open_about_dialog, daemon=True).start()
+
+    def _open_about_dialog(self) -> None:
+        icon_path = ASSETS_DIR / "siegai.ico"
+        try:
+            show_about_dialog(icon_path=icon_path if icon_path.exists() else None)
+        except Exception:
+            logger.exception("Ueber-Dialog konnte nicht geoeffnet werden")
+
     def _menu_config(self, _icon: TrayIcon, _item) -> None:
         if self._config_dialog_open:
             logger.info("Konfigurations-Dialog bereits geoeffnet")
@@ -231,6 +242,7 @@ class FuxVoiceTrayApp:
             MenuItem(f"Verwerfen  ({hk['cancel']})", lambda i, _: self._on_hotkey_cancel()),
             Menu.SEPARATOR,
             MenuItem("Konfiguration …", self._menu_config),
+            MenuItem("Über fux-voice …", self._menu_about),
             Menu.SEPARATOR,
             MenuItem("Beenden", self._menu_quit),
         )

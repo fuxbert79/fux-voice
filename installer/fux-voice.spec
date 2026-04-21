@@ -19,6 +19,8 @@ a = Analysis(
     ],
     hiddenimports=[
         'pystray._win32',
+        'pynput.keyboard._win32',
+        'pynput.mouse._win32',
     ],
     hookspath=[],
     hooksconfig={},
