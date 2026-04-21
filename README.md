@@ -40,9 +40,10 @@ Derselbe Einzeiler — das Script überschreibt die installierte Version.
 
 - **Tray-Icon** mit SiegAI-Logo, farbiger Status-Rand (grau / rot / gelb / blau)
 - **Globale Hotkeys** (Defaults):
-  - `Strg + Alt + Leertaste` — Aufnahme starten / finalisieren
-  - `Strg + Alt + P` — **Pause = Paste**: fügt aktuellen Block sofort ein und nimmt weiter auf
+  - `Windows + Ö` — Aufnahme starten / finalisieren
+  - `Windows + Ä` — **Pause = Paste**: fügt aktuellen Block sofort ein und nimmt weiter auf
   - `Esc` — Aufnahme verwerfen (nur während aktiver Aufnahme)
+  - Anpassbar via `%LOCALAPPDATA%\fux-voice\config.json`
 - **Konfiguration im Tray** — API-Key via Rechtsklick-Menü hinterlegen, kein Neustart
 - **Clipboard-Paste** — universelles Einfügen, Zwischenablage wird wiederhergestellt
 - **Deutsche Sprache fix** — kein Auto-Detect, höhere Genauigkeit

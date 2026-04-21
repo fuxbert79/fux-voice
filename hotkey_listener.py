@@ -17,8 +17,8 @@ class HotkeyListener:
         on_start_stop: Callable[[], None],
         on_pause_resume: Callable[[], None],
         on_cancel: Callable[[], None],
-        start_stop_combo: str = "ctrl+shift+space",
-        pause_resume_combo: str = "ctrl+shift+p",
+        start_stop_combo: str = "windows+ö",
+        pause_resume_combo: str = "windows+ä",
         cancel_combo: str = "esc",
     ) -> None:
         self._on_start_stop = on_start_stop
